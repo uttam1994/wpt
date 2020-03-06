@@ -56,7 +56,6 @@ def assert_contains_only_fields(obj, expected_fields):
         assert actual_field in expected_fields, \
                 'Unexpected field "%s".' % actual_field
 
-
 def leaf_values(schema):
     if isinstance(schema, list):
         return schema
