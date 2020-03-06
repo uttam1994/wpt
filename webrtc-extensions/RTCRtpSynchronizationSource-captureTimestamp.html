@@ -1,0 +1,123 @@
+<!doctype html>
+<meta charset=utf-8>
+<!-- This file contains a test that waits for 2 seconds. -->
+<meta name="timeout" content="long">
+<title>captureTimestamp attribute in RTCRtpSynchronizationSource</title>
+<div><video id="remote" width="124" height="124" autoplay></video></div>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="/webrtc/RTCPeerConnection-helper.js"></script>
+<script>
+'use strict';
+
+var absCaptureTime =
+    'http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time';
+
+function maybeAddHeaderExtensionToSdp(sdp, uri) {
+  // find the largest header extension id.
+  const sdpLines = sdp.split('\r\n');
+  const extmap = new RegExp('a=extmap:(\\d+)');
+  let maxId = undefined;
+  let maxIdLine = undefined;
+  let extmapAllowMixed = false
+  for (var i = 0; i < sdpLines.length; ++i) {
+  	if (sdpLines[i] === "a=extmap-allow-mixed") {
+  	  extmapAllowMixed = true;
+  	}
+  	var result = sdpLines[i].match(extmap);
+    if (result && result.length === 2) {
+      if (sdpLines[i].indexOf(uri) !== -1) {
+      	// The extension already exists in the sdp, no need to be added.
+      	return sdp;
+      }
+      if (maxId == undefined || result[1] > maxId) {
+        maxId = parseInt(result[1]);
+        maxIdLine = i;
+      }
+    }
+  }
+
+  if (maxId == 14 && !extmapAllowMixed) {
+    // Reaching the limit of one byte header extension. Adding two byte header
+    // extension support.
+    sdpLines.splice(maxIdLine + 1, 0, 'a=extmap-allow-mixed');
+  }
+
+  sdpLines.splice(maxIdLine + 1, 0,
+                  'a=extmap:' + (maxId + 1).toString() + ' ' + uri);
+  return sdpLines.join('\r\n');
+}
+
+async function mungeAndExchangeOffer(caller, callee) {
+  let offer = await caller.createOffer();
+
+  // Absolute capture time header extension may not be offered by default,
+  // in such case, munge the SDP.
+  offer.sdp = maybeAddHeaderExtensionToSdp(offer.sdp, absCaptureTime);
+
+  await caller.setLocalDescription(offer);
+  return callee.setRemoteDescription(offer);
+}
+
+async function mungeAndExchangeAnswer(caller, callee) {
+  let answer = await callee.createAnswer();
+
+  // Absolute capture time header extension may not be offered by default,
+  // in such case, munge the SDP.
+  answer.sdp = maybeAddHeaderExtensionToSdp(answer.sdp, absCaptureTime);
+
+  await callee.setLocalDescription(answer);
+  return caller.setRemoteDescription(answer);
+}
+
+async function exchangeOfferAndListenToOntrack(t, caller, callee) {
+  const ontrackPromise = addEventListenerPromise(t, callee, 'track');
+  await mungeAndExchangeOffer(caller, callee);
+  return ontrackPromise;
+}
+
+async function initiateSingleTrackCallAndReturnReceiver(t, kind) {
+  const caller = new RTCPeerConnection();
+  t.add_cleanup(() => caller.close());
+  const callee = new RTCPeerConnection();
+  t.add_cleanup(() => callee.close());
+
+  const stream = await getNoiseStream({[kind]:true});
+  const [track] = stream.getTracks();
+  t.add_cleanup(() => track.stop());
+  caller.addTrack(track, stream);
+
+  // TODO(crbug.com/988432): `getSynchronizationSources() on the audio side
+  // needs a hardware sink for the returned dictionary entries to get updated.
+  const remoteVideo = document.getElementById('remote');
+  callee.ontrack = e => {
+    remoteVideo.srcObject = e.streams[0];
+  }
+
+  exchangeIceCandidates(caller, callee);
+
+  const trackEvent = await exchangeOfferAndListenToOntrack(t, caller, callee);
+
+  await mungeAndExchangeAnswer(caller, callee);
+  return trackEvent.receiver;
+}
+
+// This test only passes if the implementation is sending the absolute capture
+// timestamp header extension.
+for (const kind of ['audio', 'video']) {
+  promise_test(async t => {
+    const receiver = await initiateSingleTrackCallAndReturnReceiver(t, kind);
+    // Wait for packets to start flowing.
+    await listenForSSRCs(t, receiver);
+
+    // Wait for 2 seconds so that absolute capture time header extension must be
+    // received.
+    await new Promise(resolve => t.step_timeout(resolve, 2000));
+
+    for (const ssrc of await listenForSSRCs(t, receiver)) {
+      assert_equals(typeof ssrc.captureTimestamp, 'number');
+    }
+  }, '[' + kind + '] getSynchronizationSources() contains captureTimestamp');
+}
+
+</script>
