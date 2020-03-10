@@ -1,6 +1,6 @@
-// We use requestAnimationFrame() calls to force the user agent to paint. Hence, set
-// |numFramesWaiting| to 3 and use that constant whenever the test needs to wait for
-// the next paint to occur.
+// We use requestAnimationFrame() calls to force the user agent to paint and give enough
+// time for FCP to show up in the performance timeline. Hence, set |numFramesWaiting| to
+// 3 and use that constant whenever the test needs to wait for the next paint to occur.
 const numFramesWaiting = 3;
 
 function waitForAnimationFrames(count) {
